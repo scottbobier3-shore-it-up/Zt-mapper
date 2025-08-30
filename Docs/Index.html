@@ -1,1 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>ZT-Mapper — Preview</title>
+  <style>
+    :root { --bg:#f6f7f9; --card:#fff; --line:#e2e2e2; --text:#111; --muted:#6b7280; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; color:var(--text); background:#fff; }
+    header { display:flex; gap:12px; align-items:center; padding:16px; border-bottom:1px solid var(--line); position:sticky; top:0; background:#fff; z-index:1; flex-wrap:wrap; }
+    h2 { margin:0; font-size:18px; flex:1; }
+    input[type="text"] { padding:8px 10px; border:1px solid var(--line); border-radius:8px; min-width:260px; }
+    button { padding:8px 12px; border:1px solid var(--line); background:#fff; border-radius:8px; cursor:pointer; }
+    main { padding:16px; }
+    .grid { display:grid; gap:16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .col { background:var(--bg); border-radius:10px; padding:12px; min-height:360px; display:flex; flex-direction:column; }
+    .col h3 { margin:0 0 8px 0; font-size:16px; }
+    .dropzone { flex:1; border:2px dashed transparent; border-radius:8px; padding:4px; min-height:320px; transition: border-color .15s ease; }
+    .dropzone.over { border-color:#4f46e5; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px; margin:8px 4px; cursor:grab; }
+    .card:active { cursor:grabbing; }
+    .pill { display:inline-block; font-size:12px; color:var(--muted); }
+    .footer { margin-top:16px; font-size:12px; color:var(--muted); text-align:center; }
+  </style>
+</head>
+<body>
+  <header>
+    <h2>Zero Trust Mapper (Drag activities ➜ solutions)</h2>
+    <input id="filter" type="text" placeholder="Filter activities (name or pillar)…" />
+    <button id="add-solution">+ Add Solution</button>
+    <button id="export-json">Export JSON</button>
+    <button id="reset">Reset Demo Data</button>
+  </header>
+  <main>
+    <div id="grid" class="grid"></div>
+    <div class="footer">Local demo — all data is stored in your browser (localStorage only).</div>
+  </main>
 
+  <script>
+    // --- Demo data ---
+    const DEFAULT_ACTIVITIES = [
+      {id:1, name:"Identity Verification", pillar:"Identity"},
+      {id:2, name:"Device Security Enforcement", pillar:"Devices"},
+      {id:3, name:"Application Access Control", pillar:"Applications"},
+      {id:4, name:"Data Protection", pillar:"Data"},
+      {id:5, name:"Network Segmentation", pillar:"Network"},
+      {id:6, name:"Visibility & Analytics", pillar:"Visibility & Analytics"},
+      {id:7, name:"Automation & Orchestration", pillar:"Automation & Orchestration"}
+    ];
+    const DEFAULT_SOLUTIONS = [
+      {id:100, name:"Unassigned"},
+      {id:101, name:"Zscaler ZPA"},
+      {id:102, name:"Microsoft Sentinel"},
+      {id:103, name:"Illumio Core"},
+      {id:104, name:"Microsoft Purview DLP"},
+      {id:105, name:"Okta (with CAC/PIV)"}
+    ];
+    const STORAGE_KEY = "zt_mapper_preview_v1";
+
+    function loadState() {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) {
+        const columns = { 100: DEFAULT_ACTIVITIES.map(a => a.id) };
+        DEFAULT_SOLUTIONS.slice(1).forEach(s => columns[s.id] = []);
+        const state = { activities: DEFAULT_ACTIVITIES, solutions: DEFAULT_SOLUTIONS, columns };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        return state;
+      }
+      return JSON.parse(raw);
+    }
+    function saveState(state) { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+
+    let state = loadState();
+    const grid = document.getElementById('grid');
+    const filterInput = document.getElementById('filter');
+
+    function render() {
+      grid.innerHTML = "";
+      const q = filterInput.value.trim().toLowerCase();
+      const sortedSolutions = [...state.solutions].sort((a,b)=> (a.id===100?-1:b.id===100?1:a.name.localeCompare(b.name)));
+
+      for (const sol of sortedSolutions) {
+        const col = document.createElement('div');
+        col.className = 'col';
+        const h = document.createElement('h3');
+        h.textContent = sol.name;
+        col.appendChild(h);
+
+        const dz = document.createElement('div');
+        dz.className = 'dropzone';
+        dz.dataset.solutionId = String(sol.id);
+
+        const actIds = state.columns[sol.id] || [];
+        for (const id of actIds) {
+          const a = state.activities.find(x=>x.id===id);
+          if (!a) continue;
+          const match = !q || a.name.toLowerCase().includes(q) || a.pillar.toLowerCase().includes(q);
+          if (!match) continue;
+          const card = document.createElement('div');
+          card.className='card';
+          card.draggable=true;
+          card.id='a-'+a.id;
+          card.innerHTML = `<div style="font-weight:600;">${a.name}</div><div class="pill">${a.pillar}</div>`;
+          addDnDHandlers(card);
+          dz.appendChild(card);
+        }
+
+        addZoneHandlers(dz);
+        col.appendChild(dz);
+        grid.appendChild(col);
+      }
+    }
+
+    // --- Drag & Drop ---
+    let dragId=null;
+    function addDnDHandlers(el){
+      el.addEventListener('dragstart',e=>{dragId=el.id; e.dataTransfer.setData('text/plain',dragId); e.dataTransfer.effectAllowed='move';});
+      el.addEventListener('dragend',()=>{dragId=null;});
+    }
+    function addZoneHandlers(zone){
+      zone.addEventListener('dragover',e=>{e.preventDefault(); zone.classList.add('over');});
+      zone.addEventListener('dragleave',()=>zone.classList.remove('over'));
+      zone.addEventListener('drop',e=>{
+        e.preventDefault();
+        zone.classList.remove('over');
+        const solId=parseInt(zone.dataset.solutionId,10);
+        const idStr=e.dataTransfer.getData('text/plain')||dragId;
+        if(!idStr) return;
+        const actId=parseInt(idStr.replace('a-',''),10);
+        for(const key of Object.keys(state.columns)){ state.columns[key]=state.columns[key].filter(x=>x!==actId); }
+        if(!state.columns[solId]) state.columns[solId]=[];
+        state.columns[solId].push(actId);
+        saveState(state);
+        render();
+      });
+    }
+
+    // Controls
+    document.getElementById('add-solution').addEventListener('click',()=>{
+      const name=prompt("New solution name:");
+      if(!name||!name.trim()) return;
+      const exists=state.solutions.some(s=>s.name.toLowerCase()===name.trim().toLowerCase());
+      if(exists){alert("Solution exists");return;}
+      const newId=Math.max(...state.solutions.map(s=>s.id))+1;
+      state.solutions.push({id:newId,name:name.trim()});
+      state.columns[newId]=[];
+      saveState(state);
+      render();
+    });
+    document.getElementById('export-json').addEventListener('click',()=>{
+      const out=[];
+      for(const [solIdStr,acts] of Object.entries(state.columns)){
+        const sol=state.solutions.find(s=>s.id===parseInt(solIdStr))?.name||'Unknown';
+        for(const id of acts){
+          const a=state.activities.find(x=>x.id===id);
+          if(a) out.push({activity:a.name,pillar:a.pillar,solution:sol});
+        }
+      }
+      const blob=new Blob([JSON.stringify(out,null,2)],{type:'application/json'});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url; a.download='zt-mapper-export.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+    document.getElementById('reset').addEventListener('click',()=>{
+      localStorage.removeItem(STORAGE_KEY);
+      state=loadState();
+      render();
+    });
+    filterInput.addEventListener('input',render);
+
+    render();
+  </script>
+</body>
+</html>
